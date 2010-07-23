@@ -24,7 +24,7 @@
 %% API
 -export([start_link/2, start_link/3, start_link/4,
          start/3, start/4,
-         call/3, send_call/3, close/1]).
+         call/3, call/4, send_call/3, close/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -64,7 +64,8 @@ split_options([], ClientIn, ProtoIn, TransIn) ->
     {ClientIn, ProtoIn, TransIn};
 
 split_options([Opt = {OptKey, _} | Rest], ClientIn, ProtoIn, TransIn)
-  when OptKey =:= monitor ->
+  when OptKey =:= monitor;
+       OptKey =:= timeout ->
     split_options(Rest, [Opt | ClientIn], ProtoIn, TransIn);
 
 split_options([Opt = {OptKey, _} | Rest], ClientIn, ProtoIn, TransIn)
@@ -120,6 +121,15 @@ start(ProtocolFactory, Service, ClientOpts)
                 true
         end,
 
+    Timeout =
+        case lists:keysearch(timeout, 1, ClientOpts) of
+            {value, {timeout, T}} ->
+                T;
+            _ ->
+                %% gen_server default
+                8000
+        end,
+
 
     Started = gen_server:Starter(?MODULE, [Service, Opts], []),
 
@@ -127,7 +137,7 @@ start(ProtocolFactory, Service, ClientOpts)
         Connect ->
             case Started of
                 {ok, Pid} ->
-                    case gen_server:call(Pid, {connect, ProtocolFactory}) of
+                    case gen_server:call(Pid, {connect, ProtocolFactory}, Timeout) of
                         ok ->
                             {ok, Pid};
                         Error ->
@@ -140,13 +150,20 @@ start(ProtocolFactory, Service, ClientOpts)
             Started
     end.
 
-call(Client, Function, Args)
+call(Client, Function, Args, Timeout)
   when is_pid(Client), is_atom(Function), is_list(Args) ->
-    case gen_server:call(Client, {call, Function, Args}) of
-        R = {ok, _} -> R;
-        R = {error, _} -> R;
-        {exception, Exception} -> throw(Exception)
+    case gen_server:call(Client, {call, Function, Args}, Timeout) of
+        {ok, _} = R ->
+          R;
+        {error, _} = R ->
+          R;
+        {exception, Exception} ->
+      error_logger:info_msg("got exception ~p calling ~p with timeout ~p", [Exception, Function, Timeout]),
+            throw(Exception)
     end.
+
+call(Client, Function, Args) ->
+  call(Client, Function, Args, 5000).
 
 cast(Client, Function, Args)
   when is_pid(Client), is_atom(Function), is_list(Args) ->
